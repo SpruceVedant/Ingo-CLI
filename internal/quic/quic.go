@@ -52,7 +52,7 @@ func generateTLSConfig() *tls.Config {
 }
 
 // SendFile listens on a random UDP port, prints share links, and streams the file via QUIC.
-// It accepts one connection and exits after transfer. To handle multiple, wrap calls as needed.
+// It accepts one connection and exits after transfer.
 func SendFile(ctx context.Context, filePath string, _addr string) error {
 	// Create listener with TLS
 	tlsConf := generateTLSConfig()
@@ -67,10 +67,9 @@ func SendFile(ctx context.Context, filePath string, _addr string) error {
 	if err != nil {
 		return fmt.Errorf("invalid listener address: %w", err)
 	}
-	// Loopback link
 	fmt.Printf("Share link: fs://127.0.0.1:%s\n", port)
 
-	// Accept one session
+	// Accept session
 	sess, err := listener.Accept(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to accept session: %w", err)
@@ -150,7 +149,7 @@ func ReceiveFile(ctx context.Context, link string, outDir string) error {
 		return fmt.Errorf("invalid filesize: %w", err)
 	}
 
-	// Prepare output
+	// Prepare output directory and file
 	if err := os.MkdirAll(outDir, 0755); err != nil {
 		return fmt.Errorf("failed to create output directory: %w", err)
 	}
@@ -161,9 +160,11 @@ func ReceiveFile(ctx context.Context, link string, outDir string) error {
 	}
 	defer outFile.Close()
 
-	// Copy data
+	// Copy file data; ignore clean QUIC shutdown
 	if _, err := io.Copy(outFile, reader); err != nil {
-		return fmt.Errorf("failed to receive file data: %w", err)
+		if !strings.Contains(err.Error(), "Application error 0x0") {
+			return fmt.Errorf("failed to receive file data: %w", err)
+		}
 	}
 
 	fmt.Printf("Received '%s' (%d bytes)\n", outPath, size)
