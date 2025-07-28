@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"io"
 	"math/big"
-	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -20,6 +19,8 @@ import (
 
 	quic "github.com/quic-go/quic-go"
 )
+
+const defaultPort = "4242"
 
 // generateTLSConfig creates a self-signed TLS configuration for QUIC
 func generateTLSConfig() *tls.Config {
@@ -51,96 +52,94 @@ func generateTLSConfig() *tls.Config {
 	}
 }
 
-// SendFile listens on a random UDP port, prints share links, and streams the file via QUIC.
-// It accepts one connection and exits after transfer.
-func SendFile(ctx context.Context, filePath string, _addr string) error {
-	// Create listener with TLS
+// SendFile listens on the default port and sends the file once, then exits.
+func SendFile(ctx context.Context, filePath string) error {
+	// start QUIC listener on default port
 	tlsConf := generateTLSConfig()
-	listener, err := quic.ListenAddr("0.0.0.0:0", tlsConf, &quic.Config{})
+	listener, err := quic.ListenAddr(
+		":"+defaultPort,
+		tlsConf,
+		&quic.Config{},
+	)
 	if err != nil {
-		return fmt.Errorf("failed to listen: %w", err)
+		return fmt.Errorf("listen error: %w", err)
 	}
 	defer listener.Close()
 
-	// Print share link
-	_, port, err := net.SplitHostPort(listener.Addr().String())
-	if err != nil {
-		return fmt.Errorf("invalid listener address: %w", err)
-	}
-	fmt.Printf("Share link: fs://127.0.0.1:%s\n", port)
+	fmt.Printf("Serving '%s' on port %s...\n", filePath, defaultPort)
 
-	// Accept session
+	// accept one session
 	sess, err := listener.Accept(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to accept session: %w", err)
+		return fmt.Errorf("accept error: %w", err)
 	}
 	defer sess.CloseWithError(0, "")
 
-	// Open a stream for sending
+	// open stream
 	stream, err := sess.OpenStreamSync(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to open stream: %w", err)
+		return fmt.Errorf("open stream error: %w", err)
 	}
 	defer stream.Close()
 
-	// Open file
-	file, err := os.Open(filePath)
+	// open file
+	f, err := os.Open(filePath)
 	if err != nil {
-		return fmt.Errorf("failed to open file: %w", err)
+		return fmt.Errorf("file open error: %w", err)
 	}
-	defer file.Close()
+	defer f.Close()
 
-	info, err := file.Stat()
+	info, err := f.Stat()
 	if err != nil {
-		return fmt.Errorf("failed to stat file: %w", err)
+		return fmt.Errorf("file stat error: %w", err)
 	}
 
-	// Send header: name and size
+	// send header
 	header := fmt.Sprintf("%s\n%d\n", filepath.Base(filePath), info.Size())
 	if _, err := stream.Write([]byte(header)); err != nil {
-		return fmt.Errorf("failed to send header: %w", err)
+		return fmt.Errorf("header send error: %w", err)
 	}
 
-	// Copy file data
-	if _, err := io.Copy(stream, file); err != nil {
-		return fmt.Errorf("failed to send file data: %w", err)
+	// transfer data
+	if _, err := io.Copy(stream, f); err != nil {
+		return fmt.Errorf("transfer error: %w", err)
 	}
 
 	fmt.Println("Transfer complete.")
 	return nil
 }
 
-// ReceiveFile dials the share link, receives the file, and writes it to outDir.
-func ReceiveFile(ctx context.Context, link string, outDir string) error {
-	if !strings.HasPrefix(link, "fs://") {
-		return fmt.Errorf("invalid share link: %s", link)
-	}
-	addr := strings.TrimPrefix(link, "fs://")
-
-	// Dial session
+// ReceiveFile connects to the default port, receives the file, and writes it to outDir.
+func ReceiveFile(ctx context.Context, outDir string) error {
+	// dial QUIC session
 	tlsConf := &tls.Config{InsecureSkipVerify: true, NextProtos: []string{"fastshare"}}
-	sess, err := quic.DialAddr(ctx, addr, tlsConf, &quic.Config{})
+	sess, err := quic.DialAddr(
+		ctx,
+		"127.0.0.1:"+defaultPort,
+		tlsConf,
+		&quic.Config{},
+	)
 	if err != nil {
-		return fmt.Errorf("failed to dial: %w", err)
+		return fmt.Errorf("dial error: %w", err)
 	}
 	defer sess.CloseWithError(0, "")
 
-	// Accept stream
+	// accept stream
 	stream, err := sess.AcceptStream(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to accept stream: %w", err)
+		return fmt.Errorf("accept stream error: %w", err)
 	}
 	defer stream.Close()
 
-	// Read header
+	// read header
 	reader := bufio.NewReader(stream)
 	nameLine, err := reader.ReadString('\n')
 	if err != nil {
-		return fmt.Errorf("failed to read filename: %w", err)
+		return fmt.Errorf("filename read error: %w", err)
 	}
 	sizeLine, err := reader.ReadString('\n')
 	if err != nil {
-		return fmt.Errorf("failed to read filesize: %w", err)
+		return fmt.Errorf("filesize read error: %w", err)
 	}
 
 	fileName := strings.TrimSpace(nameLine)
@@ -149,21 +148,21 @@ func ReceiveFile(ctx context.Context, link string, outDir string) error {
 		return fmt.Errorf("invalid filesize: %w", err)
 	}
 
-	// Prepare output directory and file
+	// prepare output
 	if err := os.MkdirAll(outDir, 0755); err != nil {
-		return fmt.Errorf("failed to create output directory: %w", err)
+		return fmt.Errorf("create directory error: %w", err)
 	}
 	outPath := filepath.Join(outDir, fileName)
 	outFile, err := os.Create(outPath)
 	if err != nil {
-		return fmt.Errorf("failed to create file: %w", err)
+		return fmt.Errorf("file create error: %w", err)
 	}
 	defer outFile.Close()
 
-	// Copy file data; ignore clean QUIC shutdown
+	// receive data (ignore clean QUIC shutdown)
 	if _, err := io.Copy(outFile, reader); err != nil {
 		if !strings.Contains(err.Error(), "Application error 0x0") {
-			return fmt.Errorf("failed to receive file data: %w", err)
+			return fmt.Errorf("receive error: %w", err)
 		}
 	}
 

@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"os"
 
 	"fastshare-cli/internal/quic"
 
@@ -12,16 +13,20 @@ import (
 var outDir string
 
 var recvCmd = &cobra.Command{
-	Use:   "recv [link]",
-	Short: "Receive a file using a share link",
-	Args:  cobra.ExactArgs(1),
+	Use:   "recv",
+	Short: "Receive a file from the default sender",
+	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		link := args[0]
-		fmt.Printf("Receiving file with link: %s, saving to: %s\n", link, outDir)
-		return quic.ReceiveFile(context.Background(), link, outDir)
+		// Make sure the output directory exists
+		if err := os.MkdirAll(outDir, 0755); err != nil {
+			return fmt.Errorf("could not create output dir: %w", err)
+		}
+		fmt.Printf("Receiving file and saving to: %s\n", outDir)
+		return quic.ReceiveFile(context.Background(), outDir)
 	},
 }
 
 func init() {
-	recvCmd.Flags().StringVarP(&outDir, "out", "o", ".", "Output directory for received file")
+	recvCmd.Flags().
+		StringVarP(&outDir, "out", "o", ".", "Output directory for received file")
 }

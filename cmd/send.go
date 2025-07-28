@@ -17,6 +17,6 @@ var sendCmd = &cobra.Command{
 		filePath := args[0]
 		fmt.Println("Sending file:", filePath)
 		// empty addr means listen and print share link
-		return quic.SendFile(context.Background(), filePath, "")
+		return quic.SendFile(context.Background(), filePath)
 	},
 }
